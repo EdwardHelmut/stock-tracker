@@ -61,28 +61,27 @@ def fetch_anue_broker_news(keyword="目標價"):
 
 def parse_target_price_from_title(title):
     """
-    從新聞標題自動解析：股票名稱、券商/外資、目標價數字
-    例如標題：「外資看好台積電目標價喊上1280元」、「大摩調升鴻海目標價至250元」
+    全台股通用解析版本：自動辨識任何 4 位數字股票代號與目標價
+    例如：「外資看好台積電(2330)目標價喊上1280元」、「大摩調升聯達(6500)目標價至250元」
     """
-    stock_match = re.search(r'(台積電|聯發科|鴻海|廣達|緯創|長榮|台達電|富邦金|國泰金)', title)
-    broker_match = re.search(r'(外資|大摩|小摩|高盛|美銀|野村|麥格理|瑞銀|元大|凱基|富邦|永豐)', title)
-    price_match = re.search(r'(?:目標價|上看|喊上|調升至|調高至)\s*(\d{3,4})\s*元', title)
+    # 1. 自動抓取新聞中的 4 位數股票代號（例如 2330, 2317）
+    stock_id_match = re.search(r'\(?(\d{4})\)?', title)
+    # 2. 自動抓取券商名稱
+    broker_match = re.search(r'(外資|大摩|小摩|高盛|美銀|野村|麥格理|瑞銀|元大|凱基|富邦|永豐|群益)', title)
+    # 3. 自動抓取目標價數字
+    price_match = re.search(r'(?:目標價|上看|喊上|調升至|調高至)\s*(\d{2,5})\s*元', title)
     
-    if stock_match and price_match:
-        stock_name = stock_match.group(1)
+    if price_match:
+        stock_id = stock_id_match.group(1) if stock_id_match else ""
         broker_name = broker_match.group(1) if broker_match else "法人/外資"
         target_price = float(price_match.group(1))
         
-        stock_map = {
-            "台積電": "2330", "聯發科": "2454", "鴻海": "2317",
-            "廣達": "2382", "緯創": "3231", "長榮": "2603",
-            "台達電": "2308", "富邦金": "2881", "國泰金": "2882"
-        }
-        stock_id = stock_map.get(stock_name, "")
+        # 從標題中擷取股票名稱（去除常見介詞）
+        clean_title = re.sub(r'(外資|大摩|小摩|高盛|美銀|野村|麥格理|瑞銀)', '', title)
         
         return {
             "stock_id": stock_id,
-            "stock_name": stock_name,
+            "stock_name": f"股票({stock_id})" if stock_id else "熱門焦點股",
             "broker": broker_name,
             "target_price": target_price,
             "title": title
