@@ -38,14 +38,17 @@ def get_realtime_stock_price(stock_id):
 def fetch_anue_broker_news(keyword="目標價"):
     news_items = []
     try:
-        # 放大搜尋筆數至 20 筆，增加抓取命中率
         url = f"https://news.cnyes.com/api/v3/news/keyword?keyword={keyword}&page=1&limit=20"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         res = requests.get(url, headers=headers, timeout=10)
         if res.status_code == 200:
             items = res.json().get('items', {}).get('data', [])
             for item in items:
-                news_items.append({"title": item.get('title', ''), "newsId": item.get('newsId', '')})
+                title = item.get('title', '')
+                # 同時抓取新聞內文簡介 (summary)
+                summary = item.get('summary', '')
+                full_text = f"{title} {summary}"
+                news_items.append({"title": title, "full_text": full_text})
     except Exception as e:
         print(f"爬取新聞失敗: {e}")
     return news_items
