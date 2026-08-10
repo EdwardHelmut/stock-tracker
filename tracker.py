@@ -44,25 +44,21 @@ def fetch_anue_broker_news(keyword="目標價"):
         if res.status_code == 200:
             items = res.json().get('items', {}).get('data', [])
             for item in items:
-                news_items.append({"title": item.get('title', ''), "newsId": item.get('newsId', '')})
+                title = item.get('title', '')
+                if title:
+                    news_items.append({"title": title, "newsId": item.get('newsId', '')})
     except Exception as e:
         print(f"爬取新聞失敗: {e}")
     return news_items
 
 def parse_target_price_from_title(title):
-    """
-    精準解析 FactSet / 外資新聞標題：
-    例如：
-    1. 鉅亨速報 - Factset 最新調查：統一(1216-TW)EPS預估下修至4.01元，預估目標價為85元
-    2. 瑞昱(2379-TW)...預估目標價為723.5元
-    """
     # 抓取 4 位數股票代號（相容 1216-TW, 1216, (1216)）
     stock_id_match = re.search(r'\(?(\d{4})(?:-TW)?\)?', title)
-    # 抓取股票名稱（如 統一、瑞昱、致茂）
+    # 抓取股票名稱
     stock_name_match = re.search(r'：([^\(\:]+)\(\d{4}', title)
-    # 抓取券商/機構名稱（如 Factset, 外資, 大摩）
-    broker_match = re.search(r'(Factset|FactSet|外資|大摩|小摩|高盛|美銀|野村|麥格理|瑞銀|元大|凱基|富邦)', title, re.IGNORECASE)
-    # 抓取目標價數字（支援小數點，如 85, 723.5, 2725）
+    # 抓取券商/機構名稱
+    broker_match = re.search(r'(Factset|FactSet|外資|大摩|小摩|高盛|美銀|野村|麥格理|瑞銀|元大|凱基|富邦|永豐|群益)', title, re.IGNORECASE)
+    # 抓取目標價數字（支援小數點）
     price_match = re.search(r'(?:目標價|上看|喊上|調升至|調高至|為)\s*(\d+(?:\.\d+)?)\s*元', title)
     
     if price_match:
@@ -121,9 +117,13 @@ def run_tracker():
                     f"• 來源：{title}\n"
                 )
     else:
-        msg_lines.append("今日暫無符合「明確目標價數字」之新聞。\n\n**最新掃描的新聞標題摘要：**")
-        for n in news_list[:3]:
-            msg_lines.append(f"• {n['title']}")
+        msg_lines.append("今日暫無符合「明確目標價數字」之新聞。\n")
+        if news_list:
+            msg_lines.append("**最新掃描的新聞標題摘要：**")
+            for n in news_list[:3]:
+                # 簡單清理標題字元防止 Markdown 語法錯亂
+                clean_title = n['title'].replace('*', '').replace('_', '')
+                msg_lines.append(f"• {clean_title}")
         
     full_msg = "\n".join(msg_lines)
     send_tg_message(full_msg)
