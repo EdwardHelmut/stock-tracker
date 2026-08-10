@@ -35,24 +35,31 @@ def get_realtime_stock_price(stock_id):
         pass
     return None
 
-def fetch_anue_broker_news(keyword="目標價"):
+def fetch_anue_broker_news():
     news_items = []
-    try:
-        url = f"https://news.cnyes.com/api/v3/news/keyword?keyword={keyword}&page=1&limit=20"
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-        res = requests.get(url, headers=headers, timeout=10)
-        if res.status_code == 200:
-            items = res.json().get('items', {}).get('data', [])
-            for item in items:
-                title = item.get('title', '')
-                if title:
-                    news_items.append({"title": title, "newsId": item.get('newsId', '')})
-    except Exception as e:
-        print(f"爬取新聞失敗: {e}")
+    # 使用多個關鍵字交替搜尋，避免單一關鍵字落空
+    keywords = ["目標價", "外資喊"]
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    for kw in keywords:
+        try:
+            url = f"https://news.cnyes.com/api/v3/news/keyword?keyword={kw}&page=1&limit=15"
+            res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code == 200:
+                items = res.json().get('items', {}).get('data', [])
+                for item in items:
+                    title = item.get('title', '')
+                    if title:
+                        news_items.append({"title": title, "newsId": item.get('newsId', '')})
+        except Exception as e:
+            print(f"爬取新聞({kw})失敗: {e}")
+            
     return news_items
 
 def parse_target_price_from_title(title):
-    # 抓取 4 位數股票代號（相容 1216-TW, 1216, (1216)）
+    # 抓取 4 位數股票代號 (相容 1216-TW, 1216, (1216))
     stock_id_match = re.search(r'\(?(\d{4})(?:-TW)?\)?', title)
     # 抓取股票名稱
     stock_name_match = re.search(r'：([^\(\:]+)\(\d{4}', title)
@@ -78,12 +85,17 @@ def parse_target_price_from_title(title):
 
 def run_tracker():
     print("開始執行新聞掃描...")
-    news_list = fetch_anue_broker_news(keyword="目標價")
+    news_list = fetch_anue_broker_news()
     
     parsed_reports = []
     seen_stocks = set()
+    seen_titles = set()
     
     for news in news_list:
+        if news['title'] in seen_titles:
+            continue
+        seen_titles.add(news['title'])
+        
         parsed = parse_target_price_from_title(news['title'])
         if parsed and parsed['stock_id'] and parsed['stock_id'] not in seen_stocks:
             parsed_reports.append(parsed)
@@ -120,14 +132,22 @@ def run_tracker():
         msg_lines.append("今日暫無符合「明確目標價數字」之新聞。\n")
         if news_list:
             msg_lines.append("**最新掃描的新聞標題摘要：**")
-            for n in news_list[:3]:
-                # 簡單清理標題字元防止 Markdown 語法錯亂
+            # 取前 5 則不重複的新聞摘要顯示
+            display_count = 0
+            shown_summary = set()
+            for n in news_list:
                 clean_title = n['title'].replace('*', '').replace('_', '')
-                msg_lines.append(f"• {clean_title}")
+                if clean_title not in shown_summary:
+                    msg_lines.append(f"• {clean_title}")
+                    shown_summary.add(clean_title)
+                    display_count += 1
+                if display_count >= 5:
+                    break
         
     full_msg = "\n".join(msg_lines)
     send_tg_message(full_msg)
 
 if __name__ == "__main__":
     run_tracker()
+
 
