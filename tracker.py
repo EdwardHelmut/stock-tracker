@@ -44,29 +44,36 @@ def fetch_anue_broker_news(keyword="目標價"):
         if res.status_code == 200:
             items = res.json().get('items', {}).get('data', [])
             for item in items:
-                title = item.get('title', '')
-                # 同時抓取新聞內文簡介 (summary)
-                summary = item.get('summary', '')
-                full_text = f"{title} {summary}"
-                news_items.append({"title": title, "full_text": full_text})
+                news_items.append({"title": item.get('title', ''), "newsId": item.get('newsId', '')})
     except Exception as e:
         print(f"爬取新聞失敗: {e}")
     return news_items
 
 def parse_target_price_from_title(title):
-    # 擴充匹配規則：支援更多動詞與格式
-    stock_id_match = re.search(r'\(?(\d{4})\)?', title)
-    broker_match = re.search(r'(外資|大摩|小摩|高盛|美銀|野村|麥格理|瑞銀|元大|凱基|富邦|永豐|群益|國泰)', title)
-    # 匹配「目標價/上看/喊至/調高到 數字」
-    price_match = re.search(r'(?:目標價|上看|喊上|調升至|調高至|上攻|升至)\s*(\d{2,5})\s*元?', title)
+    """
+    精準解析 FactSet / 外資新聞標題：
+    例如：
+    1. 鉅亨速報 - Factset 最新調查：統一(1216-TW)EPS預估下修至4.01元，預估目標價為85元
+    2. 瑞昱(2379-TW)...預估目標價為723.5元
+    """
+    # 抓取 4 位數股票代號（相容 1216-TW, 1216, (1216)）
+    stock_id_match = re.search(r'\(?(\d{4})(?:-TW)?\)?', title)
+    # 抓取股票名稱（如 統一、瑞昱、致茂）
+    stock_name_match = re.search(r'：([^\(\:]+)\(\d{4}', title)
+    # 抓取券商/機構名稱（如 Factset, 外資, 大摩）
+    broker_match = re.search(r'(Factset|FactSet|外資|大摩|小摩|高盛|美銀|野村|麥格理|瑞銀|元大|凱基|富邦)', title, re.IGNORECASE)
+    # 抓取目標價數字（支援小數點，如 85, 723.5, 2725）
+    price_match = re.search(r'(?:目標價|上看|喊上|調升至|調高至|為)\s*(\d+(?:\.\d+)?)\s*元', title)
     
     if price_match:
         stock_id = stock_id_match.group(1) if stock_id_match else ""
+        stock_name = stock_name_match.group(1) if stock_name_match else (f"股票({stock_id})" if stock_id else "焦點股")
         broker_name = broker_match.group(1) if broker_match else "法人/外資"
         target_price = float(price_match.group(1))
         
         return {
             "stock_id": stock_id,
+            "stock_name": stock_name,
             "broker": broker_name,
             "target_price": target_price,
             "title": title
@@ -78,19 +85,20 @@ def run_tracker():
     news_list = fetch_anue_broker_news(keyword="目標價")
     
     parsed_reports = []
-    seen_titles = set()
+    seen_stocks = set()
     
     for news in news_list:
         parsed = parse_target_price_from_title(news['title'])
-        if parsed and parsed['title'] not in seen_titles:
+        if parsed and parsed['stock_id'] and parsed['stock_id'] not in seen_stocks:
             parsed_reports.append(parsed)
-            seen_titles.add(parsed['title'])
+            seen_stocks.add(parsed['stock_id'])
             
     msg_lines = ["🤖 **[全自動新聞外資目標價動態掃描]**\n"]
     
     if parsed_reports:
         for item in parsed_reports:
             stock_id = item['stock_id']
+            stock_name = item['stock_name']
             target_price = item['target_price']
             broker = item['broker']
             title = item['title']
@@ -100,20 +108,19 @@ def run_tracker():
             if current_price and current_price > 0:
                 upside_pct = ((target_price - current_price) / current_price) * 100
                 msg_lines.append(
-                    f"📈 **代號: {stock_id}** ({broker})\n"
+                    f"📈 **{stock_id} {stock_name}** ({broker})\n"
                     f"• 最新收盤價：`{current_price:,.1f}` 元\n"
-                    f"• 新聞目標價：`{target_price:,.0f}` 元\n"
+                    f"• 新聞目標價：`{target_price:,.1f}` 元\n"
                     f"• 潛在隱含漲幅：▲ **{upside_pct:.1f}%**\n"
                     f"• 來源：{title}\n"
                 )
             else:
                 msg_lines.append(
-                    f"📈 **熱門焦點股** ({broker})\n"
-                    f"• 新聞目標價：`{target_price:,.0f}` 元\n"
+                    f"📈 **{stock_id} {stock_name}** ({broker})\n"
+                    f"• 新聞目標價：`{target_price:,.1f}` 元\n"
                     f"• 來源：{title}\n"
                 )
     else:
-        # 偵錯優化：當沒有解析到目標價時，列出最新 3 則新聞標題供查驗
         msg_lines.append("今日暫無符合「明確目標價數字」之新聞。\n\n**最新掃描的新聞標題摘要：**")
         for n in news_list[:3]:
             msg_lines.append(f"• {n['title']}")
