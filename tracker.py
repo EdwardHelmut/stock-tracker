@@ -2,13 +2,12 @@ import os
 import requests
 import json
 import re
-from urllib.parse import quote
 
 # 從 GitHub Secrets 取得金鑰
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
-# 常見熱門股對照表（當新聞未寫出4位代號時自動對應）
+# 常見熱門股對照表
 STOCK_MAP = {
     "台積電": "2330", "聯發科": "2454", "鴻海": "2317", "廣達": "2382",
     "緯創": "3231", "技嘉": "2376", "長榮": "2603", "陽明": "2609",
@@ -51,33 +50,50 @@ def get_realtime_stock_price(stock_id):
         pass
     return None
 
-def fetch_anue_broker_news():
-    """爬取鉅亨網新聞（支援中文字串 URL 自動轉碼）"""
+def fetch_yahoo_stock_news():
+    """從 Yahoo 奇摩財經 API 自動抓取最新台股目標價/外資新聞"""
     news_items = []
-    keywords = ["目標價", "外資", "評等"]
+    # 使用 Yahoo 奇摩財經開放搜尋 API
+    url = "https://tw.stock.yahoo.com/q/q?s=2330" # 常態驗證
+    search_url = "https://query1.finance.yahoo.com/v1/finance/search?q=目標價&lang=zh-Hant-TW&region=TW&quotesCount=0&newsCount=15"
+    
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
-    for kw in keywords:
+    try:
+        res = requests.get(search_url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            news_list = data.get('news', [])
+            for item in news_list:
+                title = item.get('title', '')
+                if title:
+                    news_items.append({"title": title})
+    except Exception as e:
+        print(f"Yahoo 新聞抓取失敗: {e}")
+        
+    # 備用來源：若 Yahoo 未抓到，嘗試 Google News RSS 抓取「外資 目標價」
+    if not news_items:
         try:
-            # 關鍵字中文必須經過 quote 轉碼
-            encoded_kw = quote(kw)
-            url = f"https://news.cnyes.com/api/v3/news/keyword?keyword={encoded_kw}&page=1&limit=15"
-            res = requests.get(url, headers=headers, timeout=10)
-            if res.status_code == 200:
-                items = res.json().get('items', {}).get('data', [])
-                for item in items:
-                    title = item.get('title', '')
+            import xml.etree.ElementTree as ET
+            rss_url = "https://news.google.com/rss/search?q=外資+目標價+台股&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
+            res_rss = requests.get(rss_url, headers=headers, timeout=10)
+            if res_rss.status_code == 200:
+                root = ET.fromstring(res_rss.text)
+                for item in root.findall('.//item')[:15]:
+                    title = item.find('title').text
                     if title:
-                        news_items.append({"title": title, "newsId": item.get('newsId', '')})
+                        # 清理新聞來源出處尾巴 (例如 " - 經濟日報")
+                        clean_title = re.sub(r'\s*-\s*[^-]+$', '', title)
+                        news_items.append({"title": clean_title})
         except Exception as e:
-            print(f"爬取新聞({kw})失敗: {e}")
-            
+            print(f"RSS 新聞抓取失敗: {e}")
+
     return news_items
 
 def parse_target_price_from_title(title):
-    """放寬匹配邏輯，支援多種新聞標題格式"""
+    """解析新聞標題中的個股、外資券商與目標價"""
     # 1. 嘗試抓取 4 位數股票代號
     stock_id_match = re.search(r'\(?(\d{4})(?:-TW)?\)?', title)
     stock_id = stock_id_match.group(1) if stock_id_match else ""
@@ -90,23 +106,17 @@ def parse_target_price_from_title(title):
             if not stock_id:
                 stock_id = code
             break
-            
-    if not stock_id and stock_name == "焦點股":
-        # 嘗試從鉅亨網標題提取名稱 (例如 統一(1216-TW))
-        name_extract = re.search(r'：([^\(\:]+)\(\d{4}', title)
-        if name_extract:
-            stock_name = name_extract.group(1).strip()
 
     # 3. 抓取券商/機構名稱
     broker_match = re.search(r'(Factset|FactSet|外資|大摩|小摩|高盛|美銀|野村|麥格理|瑞銀|元大|凱基|富邦|永豐|群益|統一|中信)', title, re.IGNORECASE)
     broker_name = broker_match.group(1) if broker_match else "法人/外資"
 
-    # 4. 超強放寬目標價數字抓取（相容 1280元、1280、723.5、喊至1280 等）
-    price_match = re.search(r'(?:目標價|上看|喊上|喊至|調升至|調高至|為|上看|高至|估)\s*:?\s*(\d+(?:\.\d+)?)\s*元?', title)
+    # 4. 抓取目標價數字
+    price_match = re.search(r'(?:目標價|上看|喊上|喊至|調升至|調高至|為|高至|估)\s*:?\s*(\d+(?:\.\d+)?)\s*元?', title)
     
     if price_match:
         target_price = float(price_match.group(1))
-        # 過濾掉太小或不合常理的數字（避免誤抓 EPS 或百分比）
+        # 過濾不合理的極端數字（如誤抓 EPS）
         if target_price > 10 and target_price < 20000:
             return {
                 "stock_id": stock_id,
@@ -120,8 +130,8 @@ def parse_target_price_from_title(title):
 
 def run_tracker():
     print("開始執行新聞掃描...")
-    news_list = fetch_anue_broker_news()
-    print(f"共抓取到 {len(news_list)} 條新聞")
+    news_list = fetch_yahoo_stock_news()
+    print(f"共成功抓取到 {len(news_list)} 條新聞")
     
     parsed_reports = []
     seen_keys = set()
@@ -135,7 +145,6 @@ def run_tracker():
         
         parsed = parse_target_price_from_title(t)
         if parsed:
-            # 以 股票名稱+目標價 作為唯一值去重
             dedup_key = f"{parsed['stock_name']}_{parsed['target_price']}"
             if dedup_key not in seen_keys:
                 parsed_reports.append(parsed)
@@ -183,12 +192,13 @@ def run_tracker():
                 if count >= 5:
                     break
         else:
-            msg_lines.append("⚠️ 目前未擷取到任何新聞列表，請檢查 API 連線狀態。")
+            msg_lines.append("⚠️ 暫無擷取到最新新聞列表。")
         
     full_msg = "\n".join(msg_lines)
     send_tg_message(full_msg)
-    print("程式執行完畢，訊息已發送至 Telegram。")
+    print("執行完畢！")
 
 if __name__ == "__main__":
     run_tracker()
+
 
