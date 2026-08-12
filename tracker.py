@@ -94,30 +94,38 @@ def fetch_yahoo_stock_news():
 
 def parse_target_price_from_title(title):
     """解析新聞標題中的個股、外資券商與目標價"""
-    # 1. 嘗試抓取 4 位數股票代號
+    # 1. 優先嘗試抓取括號內的 4 位數股票代號
     stock_id_match = re.search(r'\(?(\d{4})(?:-TW)?\)?', title)
     stock_id = stock_id_match.group(1) if stock_id_match else ""
     
-    # 2. 嘗試比對股票名稱
-    stock_name = "焦點股"
-    for name, code in STOCK_MAP.items():
-        if name in title:
-            stock_name = name
+    # 2. 自動比對股票名稱與關鍵字（例如：「川湖」、「滑軌」、「航空」）
+    stock_name = ""
+    for kw, code in STOCK_MAP.items():
+        if kw in title:
+            stock_name = kw
             if not stock_id:
                 stock_id = code
             break
 
-    # 3. 抓取券商/機構名稱
-    broker_match = re.search(r'(Factset|FactSet|外資|大摩|小摩|高盛|美銀|野村|麥格理|瑞銀|元大|凱基|富邦|永豐|群益|統一|中信)', title, re.IGNORECASE)
+    # 3. 若無代號且未比對出關鍵字，嘗試擷取通用名稱
+    if not stock_name:
+        name_extract = re.search(r'：([^\(\:]+)\(\d{4}', title)
+        if name_extract:
+            stock_name = name_extract.group(1).strip()
+        else:
+            stock_name = "焦點熱門股"
+
+    # 4. 抓取券商/機構名稱（如 花旗、大摩、高盛等）
+    broker_match = re.search(r'(Factset|FactSet|外資|大摩|小摩|高盛|美銀|野村|麥格理|瑞銀|元大|凱基|富邦|永豐|群益|統一|中信|花旗)', title, re.IGNORECASE)
     broker_name = broker_match.group(1) if broker_match else "法人/外資"
 
-    # 4. 抓取目標價數字
+    # 5. 抓取目標價數字（支援小數點）
     price_match = re.search(r'(?:目標價|上看|喊上|喊至|調升至|調高至|為|高至|估)\s*:?\s*(\d+(?:\.\d+)?)\s*元?', title)
     
     if price_match:
         target_price = float(price_match.group(1))
-        # 過濾不合理的極端數字（如誤抓 EPS）
-        if target_price > 10 and target_price < 20000:
+        # 過濾不合理的極端數字（避免誤抓 EPS，如 1.72 元）
+        if target_price > 10 and target_price < 30000:
             return {
                 "stock_id": stock_id,
                 "stock_name": stock_name,
